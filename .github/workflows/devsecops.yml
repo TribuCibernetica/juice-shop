@@ -58,7 +58,7 @@ jobs:
           pip install detect-secrets
           mkdir -p ${{ env.REPORT_DIR }}
           detect-secrets scan --baseline . --exclude-files '.git/*' --output ${{ env.REPORT_DIR }}/secrets-report.json || true
-
+          
       - name: Gate: Fail if Secrets Detected
         run: |
           if ! grep -q '"results": {}' ${{ env.REPORT_DIR }}/secrets-report.json 2>/dev/null; then
@@ -66,7 +66,7 @@ jobs:
             exit 1
           else
             echo "✅ No se detectaron secrets"
-
+     
       - name: Build Juice Shop Docker Image
         run: |
           docker build -t ${{ env.LOCAL_IMAGE_TAG }} .
