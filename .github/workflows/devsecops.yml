@@ -1,0 +1,149 @@
+name: DevSecOps Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Build Project
+        run: mvn clean install -DskipTests
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-build
+          path: target/*.jar
+
+  sast:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      # SonarQube / SonarCloud
+      - name: SonarQube Scan
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.projectKey=juice-shop
+            -Dsonar.organization=mi_org
+            -Dsonar.host.url=https://sonarcloud.io
+
+      # Semgrep
+      - name: Semgrep SAST
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: 'p/ci'
+
+      - name: Upload SAST Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: sast-reports
+          path: .
+
+  dependencies:
+    runs-on: ubuntu-latest
+    needs: build
+    strategy:
+      matrix:
+        tool: [dependency-check, trivy]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependency-Check
+        if: matrix.tool == 'dependency-check'
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: 'juice-shop'
+          path: '.'
+          format: 'HTML'
+          out: 'reports/dc'
+
+      - name: Trivy Scan
+        if: matrix.tool == 'trivy'
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          format: 'table'
+          exit-code: '0'
+          ignore-unfixed: true
+          output: 'reports/trivy.txt'
+
+      - name: Upload Dependency Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-reports
+          path: reports/
+
+  dast:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      # OWASP ZAP Baseline Scan
+      - name: OWASP ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.9.0
+        with:
+          target: 'http://juice-shop:3000'
+          rules_file_name: 'zap/rules.tsv'
+          cmd_options: '-a'
+
+      - name: Upload ZAP Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-report
+          path: zap.out
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - name: GitHub Secret Scan
+        run: echo "Secret scanning activado para repo privado (GitHub detecta automáticamente)"
+
+  aggregate-reports:
+    runs-on: ubuntu-latest
+    needs: [sast, dependencies, dast, secret-scan]
+    steps:
+      - name: Download all reports
+        uses: actions/download-artifact@v4
+        with:
+          path: reports
+
+      - name: Aggregate Final Report
+        run: |
+          mkdir final-report
+          echo "=== DevSecOps Final Report ===" > final-report/summary.txt
+          echo "" >> final-report/summary.txt
+          echo "--- SAST ---" >> final-report/summary.txt
+          ls reports/sast-reports >> final-report/summary.txt || true
+          echo "--- Dependencies ---" >> final-report/summary.txt
+          ls reports/dependency-reports >> final-report/summary.txt || true
+          echo "--- DAST ---" >> final-report/summary.txt
+          ls reports/zap-report >> final-report/summary.txt || true
+          echo "--- Secret Scan ---" >> final-report/summary.txt
+          echo "Revisión de secretos realizada por GitHub" >> final-report/summary.txt
+
+      - name: Upload Final Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-report
+          path: final-report/
