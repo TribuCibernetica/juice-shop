@@ -1,12 +1,201 @@
-name: juice-shop-sonarqube
-# Workflow solo SonarQube
+name: juice-shop-devsecops
+
 on:
   push:
-    branches: [ develop ]
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+
+env:
+  LOCAL_IMAGE_TAG: bkimminich/juice-shop:latest
+  REPORT_DIR: gl-security-reports
+  SONAR_URL: ${{ secrets.SONAR_HOST_URL }}
+  SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
 jobs:
-  sonarqube:
+
+  # =========================================================================
+  # 1. BUILD, TEST, SAST, SECRETS
+  # =========================================================================
+  build_sast_secrets:
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
-      - name: Run SonarQube
-        run: echo "Ejecutando SonarQube..."
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+
+      - name: Install Dependencies and Run Tests
+        run: |
+          npm install
+          npm test
+
+      - name: Run Semgrep SAST
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: 'p/ci'
+
+      - name: Run SonarQube Scanner
+        run: |
+          echo "✅ Running SonarQube Scanner..."
+          docker run --rm -v $PWD:/usr/src -w /usr/src sonarsource/sonar-scanner-cli \
+            -Dsonar.projectKey=JUICE-SHOP-REAL \
+            -Dsonar.sources=. \
+            -Dsonar.host.url=${SONAR_URL} \
+            -Dsonar.login=${SONAR_TOKEN} \
+            -Dsonar.qualitygate.wait=true \
+            -X
+
+      - name: Run detect-secrets
+        run: |
+          docker run --rm -v $PWD:/app python:3.9-slim bash -c "\
+            pip install detect-secrets && \
+            mkdir -p ${REPORT_DIR} && \
+            detect-secrets scan --baseline . --exclude-files '.git/*' --output ${REPORT_DIR}/secrets-report.json && \
+            echo '=== Secrets Report ===' && \
+            cat ${REPORT_DIR}/secrets-report.json \
+          "
+
+          - name: Gate: Fail if Secrets Detected
+            run: |
+              if ! grep -q '"results": {}' ${REPORT_DIR}/secrets-report.json 2>/dev/null; then
+                echo "❌ Secrets encontrados"
+                exit 1
+              else
+                echo "✅ No se detectaron secrets"
+
+      - name: Upload Secrets Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: secrets-report
+          path: ${REPORT_DIR}/secrets-report.json
+
+      - name: Pull Juice Shop Docker Image
+        run: docker pull ${LOCAL_IMAGE_TAG}
+
+  # =========================================================================
+  # 2. SCA / Container Scan (Trivy)
+  # =========================================================================
+  container_scan:
+    runs-on: self-hosted
+    needs: [build_sast_secrets]
+    steps:
+      - name: Run Trivy Container Scan
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $PWD:/app aquasec/trivy:latest image \
+            --format sarif \
+            --output trivy-results.sarif \
+            --severity CRITICAL,HIGH \
+            --exit-code 0 \
+            ${LOCAL_IMAGE_TAG}
+
+      - name: Show Trivy Scan Results
+        run: cat trivy-results.sarif
+
+      - name: Upload Trivy SARIF Results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+
+  # =========================================================================
+  # 3. DAST Scan (OWASP ZAP)
+  # =========================================================================
+  dast_scan:
+    runs-on: self-hosted
+    needs: [container_scan]
+    env:
+      TARGET_URL: http://localhost:3000
+    steps:
+      - name: Start Juice Shop Container
+        run: docker run -d --name juice-shop-test -p 3000:3000 ${LOCAL_IMAGE_TAG} && sleep 30
+
+      - name: Run OWASP ZAP Baseline Scan
+        run: |
+          docker run --rm -v $PWD:/zap/wrk/:Z ghcr.io/zaproxy/zaproxy/zap-baseline:stable \
+            -t ${TARGET_URL} -r zap-baseline-report.xml -J zap-baseline-report.json -I
+
+      - name: Show ZAP Scan Results
+        run: cat zap-baseline-report.json
+
+      - name: Stop Juice Shop Container
+        if: always()
+        run: docker stop juice-shop-test
+
+      - name: Upload ZAP Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-report
+          path: zap-baseline-report.json
+
+  # =========================================================================
+  # 4. SECURITY GATE (Falla final después de todos los análisis)
+  # =========================================================================
+  security_gate:
+    runs-on: self-hosted
+    needs: [build_sast_secrets, container_scan, dast_scan] 
+    steps:
+      - name: Final Check - Application Vulnerabilities
+        run: |
+          echo "=================================================="
+          echo "INFORME DE VULNERABILIDAD DE JUICE SHOP"
+          echo "=================================================="
+          
+          FAIL=0
+          
+          # Trivy
+          if grep -q '"severity":"CRITICAL"' trivy-results.sarif; then FAIL=1; fi
+          if grep -q '"severity":"HIGH"' trivy-results.sarif; then FAIL=1; fi
+          
+          # ZAP
+          if grep -q '"risk": "High"' zap-baseline-report.json; then FAIL=1; fi
+          if grep -q '"risk": "Critical"' zap-baseline-report.json; then FAIL=1; fi
+          
+          if [ $FAIL -eq 1 ]; then
+            echo "❌ Security Gate FAIL: Vulnerabilidades críticas encontradas"
+            exit 1
+          else
+            echo "✅ Security Gate PASS: No se detectaron vulnerabilidades críticas"
+
+      - name: Final Cleanup
+        if: always()
+        run: |
+          echo "Ejecutando limpieza después del Security Gate..."
+
+  # =========================================================================
+  # 5. Aggregate Reports
+  # =========================================================================
+  aggregate_reports:
+    runs-on: ubuntu-latest
+    needs: [build_sast_secrets, container_scan, dast_scan]
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: reports
+
+      - name: Aggregate Final Report
+        run: |
+          mkdir -p final-report
+          echo "=== DevSecOps Final Report ===" > final-report/summary.txt
+          echo "--- Secrets ---" >> final-report/summary.txt
+          cat reports/secrets-report/secrets-report.json >> final-report/summary.txt || true
+          echo "--- Trivy ---" >> final-report/summary.txt
+          cat reports/trivy-results.sarif >> final-report/summary.txt || true
+          echo "--- ZAP ---" >> final-report/summary.txt
+          cat reports/zap-report/zap-baseline-report.json >> final-report/summary.txt || true
+
+      - name: Upload Final Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-report
+          path: final-report/
