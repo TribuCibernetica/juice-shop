@@ -60,14 +60,14 @@ jobs:
           mkdir -p ${{ env.REPORT_DIR }}
           detect-secrets scan --baseline . --exclude-files '.git/*' --output ${{ env.REPORT_DIR }}/secrets-report.json || true
 
-      - name: Gate: Fail if Secrets Detected
-        run: |
-          if ! grep -q '"results": {}' ${{ env.REPORT_DIR }}/secrets-report.json 2>/dev/null; then
-            echo "❌ Secrets encontrados, fallando pipeline"
-            exit 1
-          else
-            echo "✅ No se detectaron secrets"
-          fi
+          - name: Gate: Fail if Secrets Detected
+            run: |
+              if ! grep -q '"results": {}' ${{ env.REPORT_DIR }}/secrets-report.json 2>/dev/null; then
+                echo "❌ Secrets encontrados, fallando pipeline"
+                exit 1
+              else
+                echo "✅ No se detectaron secrets"
+              fi
 
       - name: Show Secrets Report
         run: cat ${{ env.REPORT_DIR }}/secrets-report.json
