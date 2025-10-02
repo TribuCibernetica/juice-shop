@@ -64,8 +64,7 @@ jobs:
           mkdir -p ${{ env.REPORT_DIR }}
           detect-secrets scan --baseline . --exclude-files '.git/*' --output ${{ env.REPORT_DIR }}/secrets-report.json || true
 
-      # --- Fail if Secrets Detected ---
-      - name: Gate: Fail if Secrets Detected
+     - name: Gate: Fail if Secrets Detected
         run: |
           if ! grep -q '"results": {}' ${{ env.REPORT_DIR }}/secrets-report.json 2>/dev/null; then
             echo "❌ Secrets encontrados, fallando pipeline"
