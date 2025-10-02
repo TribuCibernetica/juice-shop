@@ -1,5 +1,4 @@
 name: 🚨 Juice Shop DevSecOps Pipeline: BUILD + SCAN 🚨
-
 on:
   push:
     branches: [ main ]
