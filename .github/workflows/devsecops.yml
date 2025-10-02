@@ -42,21 +42,25 @@ jobs:
         uses: returntocorp/semgrep-action@v1
         with:
           config: 'p/ci'
+
       - name: SonarQube Analysis
-        uses: sonarsource/sonarqube-scan-action@master
-        with:
-          args: >
-            -Dsonar.projectKey=JUICE-SHOP-REAL
-            -Dsonar.sources=.
-            -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }}
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
-            -Dsonar.qualitygate.wait=true
+        run: |
+          echo "✅ Running SonarQube Scanner..."
+          sonar-scanner \
+            -Dsonar.projectKey=JUICE-SHOP-REAL \
+            -Dsonar.sources=. \
+            -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }} \
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }} \
+            -Dsonar.qualitygate.wait=true \
+            -X
 
       - name: Run detect-secrets
         run: |
           pip install detect-secrets
           mkdir -p ${{ env.REPORT_DIR }}
-          detect-secrets scan --baseline . --exclude-files '.git/*' --output ${{ env.REPORT_DIR }}/secrets-report.json || true
+          detect-secrets scan --baseline . --exclude-files '.git/*' --output ${{ env.REPORT_DIR }}/secrets-report.json
+          echo "=== Secrets Report ==="
+          cat ${{ env.REPORT_DIR }}/secrets-report.json
 
           - name: Gate: Fail if Secrets Detected
             run: |
@@ -67,17 +71,14 @@ jobs:
                 echo "✅ No se detectaron secrets"
               fi
 
-      - name: Show Secrets Report
-        run: cat ${{ env.REPORT_DIR }}/secrets-report.json
-
-      - name: Build Juice Shop Docker Image
-        run: docker pull ${{ env.LOCAL_IMAGE_TAG }}
-
-      - name: Upload Build Artifacts
+      - name: Upload Secrets Report
         uses: actions/upload-artifact@v4
         with:
-          name: app-build
-          path: ${{ env.REPORT_DIR }}
+          name: secrets-report
+          path: ${{ env.REPORT_DIR }}/secrets-report.json
+
+      - name: Pull Juice Shop Docker Image
+        run: docker pull ${{ env.LOCAL_IMAGE_TAG }}
 
   # =========================================================================
   # 2. SCA / Container Scan (Trivy)
@@ -143,6 +144,12 @@ jobs:
         if: always()
         run: docker stop juice-shop-test
 
+      - name: Upload ZAP Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-report
+          path: zap-baseline-report.json
+
   # =========================================================================
   # 4. Aggregate Reports
   # =========================================================================
@@ -159,14 +166,12 @@ jobs:
         run: |
           mkdir -p final-report
           echo "=== DevSecOps Final Report ===" > final-report/summary.txt
-          echo "--- SAST ---" >> final-report/summary.txt
-          ls reports/sast-reports >> final-report/summary.txt || true
-          echo "--- Dependencies (Trivy) ---" >> final-report/summary.txt
-          ls reports/trivy-results.sarif >> final-report/summary.txt || true
-          echo "--- DAST (ZAP) ---" >> final-report/summary.txt
-          ls reports/zap-baseline-report.json >> final-report/summary.txt || true
           echo "--- Secrets ---" >> final-report/summary.txt
-          cat reports/gl-security-reports/secrets-report.json >> final-report/summary.txt || true
+          cat reports/secrets-report/secrets-report.json >> final-report/summary.txt || true
+          echo "--- Trivy ---" >> final-report/summary.txt
+          cat reports/trivy-results.sarif >> final-report/summary.txt || true
+          echo "--- ZAP ---" >> final-report/summary.txt
+          cat reports/zap-report/zap-baseline-report.json >> final-report/summary.txt || true
 
       - name: Upload Final Report
         uses: actions/upload-artifact@v4
