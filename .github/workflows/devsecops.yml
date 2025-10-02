@@ -1,4 +1,4 @@
-name: juice-shop
+name: juice-shop-devsecops
 
 on:
   push:
@@ -12,36 +12,42 @@ permissions:
   security-events: write
 
 env:
-  LOCAL_IMAGE_TAG: local-juice-shop:latest
+  LOCAL_IMAGE_TAG: juice-shop-local:latest
   REPORT_DIR: gl-security-reports
 
 jobs:
 
   # =========================================================================
-  # 1. BUILD, TEST, SAST, SCA, SECRETS
+  # 1. BUILD, TEST, SAST, SECRETS
   # =========================================================================
-  build_sast_sca:
-    runs-on: self-hosted
+  build_sast_secrets:
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # --- SETUP NODE.JS ---
+      # --- Setup Node.js ---
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 'lts/*'
 
-      # --- BUILD and UNIT TESTS ---
+      # --- Build & Unit Tests ---
       - name: Install Dependencies and Run Tests
         run: |
           npm install
           npm test
 
+      # --- SAST: Semgrep ---
+      - name: Run Semgrep SAST
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: 'p/ci'
+
       # --- SAST: SonarQube ---
-      - name: Run SonarQube Analysis
+      - name: SonarQube Analysis
         uses: sonarsource/sonarqube-scan-action@master
         with:
           args: >
@@ -51,20 +57,15 @@ jobs:
             -Dsonar.login=${{ secrets.SONAR_TOKEN }}
             -Dsonar.qualitygate.wait=true
 
-      # --- DOCKER BUILD ---
-      - name: Build Local Docker Image
-        run: |
-          docker build -t ${{ env.LOCAL_IMAGE_TAG }} .
-
-      # --- SECRETS y SCA ---
+      # --- Detect Secrets ---
       - name: Run detect-secrets
         run: |
           pip install detect-secrets
           mkdir -p ${{ env.REPORT_DIR }}
           detect-secrets scan --baseline . --exclude-files '.git/*' --output ${{ env.REPORT_DIR }}/secrets-report.json || true
 
-      # --- GATE: Fallar si se detectan Secrets ---
-      - name: Fail if Secrets Detected
+      # --- Fail if Secrets Detected ---
+      - name: Gate: Fail if Secrets Detected
         run: |
           if ! grep -q '"results": {}' ${{ env.REPORT_DIR }}/secrets-report.json 2>/dev/null; then
             echo "❌ Secrets encontrados, fallando pipeline"
@@ -72,14 +73,30 @@ jobs:
           else
             echo "✅ No se detectaron secrets"
 
+      # --- Build Docker Image ---
+      - name: Build Juice Shop Docker Image
+        run: |
+          docker build -t ${{ env.LOCAL_IMAGE_TAG }} .
+
+      # --- Upload Artifacts ---
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-build
+          path: ${{ env.REPORT_DIR }}
+
   # =========================================================================
-  # 2. CONTAINER SCAN (Trivy)
+  # 2. SCA / Container Scan (Trivy)
   # =========================================================================
-  container_image_scan:
-    runs-on: self-hosted
-    needs: [build_sast_sca]
+  container_scan:
+    runs-on: ubuntu-latest
+    needs: [build_sast_secrets]
     steps:
-      - name: Run Trivy vulnerability scanner
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # --- Run Trivy ---
+      - name: Run Trivy Container Scan
         uses: docker://aquasec/trivy:latest
         with:
           args: |
@@ -90,31 +107,31 @@ jobs:
             --exit-code 1 \
             ${{ env.LOCAL_IMAGE_TAG }}
 
-      - name: Upload Trivy results to GitHub Security Tab
+      - name: Upload Trivy SARIF Results
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-results.sarif
 
   # =========================================================================
-  # 3. DAST SCAN (OWASP ZAP)
+  # 3. DAST Scan (OWASP ZAP)
   # =========================================================================
   dast_scan:
-    runs-on: self-hosted
-    needs: [container_image_scan]
+    runs-on: ubuntu-latest
+    needs: [build_sast_secrets]
     env:
       TARGET_URL: http://localhost:3000
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # --- Despliegue Temporal ---
-      - name: Start Juice Shop Container
+      # --- Run Juice Shop Container ---
+      - name: Start Juice Shop
         run: |
           docker run -d --name juice-shop-test -p 3000:3000 ${{ env.LOCAL_IMAGE_TAG }}
           sleep 30
 
-      # --- OWASP ZAP Baseline Scan ---
-      - name: Run ZAP Baseline Scan
+      # --- Run OWASP ZAP Baseline Scan ---
+      - name: ZAP Baseline Scan
         uses: docker://ghcr.io/zaproxy/zaproxy/zap-baseline:stable
         with:
           args: |
@@ -123,28 +140,28 @@ jobs:
             -J zap-baseline-report.json \
             -I
 
-      # --- Gate: Fallar si hay alertas críticas ---
+      # --- Gate: Fail if Alerts High/Critical ---
       - name: Check ZAP Alerts
         run: |
           if grep -q '"risk": "High"' zap-baseline-report.json || grep -q '"risk": "Critical"' zap-baseline-report.json; then
-            echo "❌ ¡FALLO DE DAST! Alertas Altas/Críticas."
+            echo "❌ ¡DAST Falló! Alertas Altas/Críticas."
             exit 1
           else
             echo "✅ DAST completado."
 
-      # --- LIMPIEZA ---
+      # --- Cleanup ---
       - name: Stop Juice Shop Container
         if: always()
         run: docker stop juice-shop-test
 
   # =========================================================================
-  # 4. AGREGACIÓN DE REPORTES
+  # 4. Aggregate Reports
   # =========================================================================
   aggregate_reports:
-    runs-on: self-hosted
-    needs: [build_sast_sca, container_image_scan, dast_scan]
+    runs-on: ubuntu-latest
+    needs: [build_sast_secrets, container_scan, dast_scan]
     steps:
-      - name: Download all reports
+      - name: Download All Artifacts
         uses: actions/download-artifact@v4
         with:
           path: reports
@@ -155,10 +172,10 @@ jobs:
           echo "=== DevSecOps Final Report ===" > final-report/summary.txt
           echo "--- SAST ---" >> final-report/summary.txt
           ls reports/sast-reports >> final-report/summary.txt || true
-          echo "--- Dependencies ---" >> final-report/summary.txt
-          ls reports/dependency-reports >> final-report/summary.txt || true
-          echo "--- DAST ---" >> final-report/summary.txt
-          ls reports/zap-report >> final-report/summary.txt || true
+          echo "--- Dependencies (Trivy) ---" >> final-report/summary.txt
+          ls reports/trivy-results.sarif >> final-report/summary.txt || true
+          echo "--- DAST (ZAP) ---" >> final-report/summary.txt
+          ls reports/zap-baseline-report.json >> final-report/summary.txt || true
           echo "--- Secrets ---" >> final-report/summary.txt
           cat reports/gl-security-reports/secrets-report.json >> final-report/summary.txt || true
 
