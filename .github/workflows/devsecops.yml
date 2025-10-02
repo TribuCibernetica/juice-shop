@@ -1,29 +1,34 @@
-name:juice-shop
+name: juice-shop
+
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+
 permissions:
   contents: read
   packages: write
   security-events: write
+
 env:
-  LOCAL_IMAGE_TAG: local-juice-shop:latest # Etiqueta para la imagen que construimos
+  LOCAL_IMAGE_TAG: local-juice-shop:latest
   REPORT_DIR: gl-security-reports
-jobs: # <--- NOTA: Aquí el bloque 'jobs:' está inmediatamente después de 'env:'
-  
+
+jobs:
+
   # =========================================================================
-  # 1. BUILD, TEST, SAST, SCA, SECRETS (Trabajando en el código fuente)
+  # 1. BUILD, TEST, SAST, SCA, SECRETS
   # =========================================================================
   build_sast_sca:
     runs-on: self-hosted
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-        fetch-depth: 0
+        with:
+          fetch-depth: 0
 
-      # --- SETUP NODE.JS (Reemplaza el antiguo "mvn") ---
+      # --- SETUP NODE.JS ---
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -35,93 +40,130 @@ jobs: # <--- NOTA: Aquí el bloque 'jobs:' está inmediatamente después de 'env
           npm install
           npm test
 
-      # --- SAST: SonarQube (EJECUCIÓN REAL sobre el código fuente) ---
+      # --- SAST: SonarQube ---
       - name: Run SonarQube Analysis
         uses: sonarsource/sonarqube-scan-action@master
         with:
           args: >
-            -Dsonar.projectKey=JUICE-SHOP-REAL # Clave única del proyecto
+            -Dsonar.projectKey=JUICE-SHOP-REAL
             -Dsonar.sources=.
             -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }}
             -Dsonar.login=${{ secrets.SONAR_TOKEN }}
             -Dsonar.qualitygate.wait=true
 
-      # --- DOCKER BUILD (Construir la imagen a partir de este código) ---
+      # --- DOCKER BUILD ---
       - name: Build Local Docker Image
         run: |
           docker build -t ${{ env.LOCAL_IMAGE_TAG }} .
 
-      # --- SECRETS y SCA (Los escaneos que corren sobre el código base) ---
+      # --- SECRETS y SCA ---
       - name: Run detect-secrets
-        uses: docker://python:3.9-slim
-        with:
-          args: sh -c "pip install detect-secrets && detect-secrets scan --baseline . --exclude-files '.git/*' --output ${{ env.REPORT_DIR }}/secrets-report.json || true"
-      
+        run: |
+          pip install detect-secrets
+          mkdir -p ${{ env.REPORT_DIR }}
+          detect-secrets scan --baseline . --exclude-files '.git/*' --output ${{ env.REPORT_DIR }}/secrets-report.json || true
+
       # --- GATE: Fallar si se detectan Secrets ---
       - name: Fail if Secrets Detected
         run: |
-          mkdir -p ${{ env.REPORT_DIR }}
-          if ! grep -q '"results": {}' ${{ env.REPORT_DIR }}/secrets-report.json 2>/dev/null; then exit 1; fi
+          if ! grep -q '"results": {}' ${{ env.REPORT_DIR }}/secrets-report.json 2>/dev/null; then
+            echo "❌ Secrets encontrados, fallando pipeline"
+            exit 1
+          else
+            echo "✅ No se detectaron secrets"
 
   # =========================================================================
-  # 2. CONTAINER SCAN (Trivy - Escaneando la imagen recién construida)
+  # 2. CONTAINER SCAN (Trivy)
   # =========================================================================
   container_image_scan:
     runs-on: self-hosted
     needs: [build_sast_sca]
     steps:
-      - name: Run Trivy vulnerability scanner (Contained)
+      - name: Run Trivy vulnerability scanner
         uses: docker://aquasec/trivy:latest
         with:
-          args: image
-                --format sarif
-                --output trivy-results.sarif
-                --severity CRITICAL,HIGH
-                --exit-code 1
-                ${{ env.LOCAL_IMAGE_TAG }} # <--- Escanea la imagen local
+          args: |
+            image \
+            --format sarif \
+            --output trivy-results.sarif \
+            --severity CRITICAL,HIGH \
+            --exit-code 1 \
+            ${{ env.LOCAL_IMAGE_TAG }}
+
       - name: Upload Trivy results to GitHub Security Tab
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-results.sarif
 
   # =========================================================================
-  # 3. DAST SCAN (ZAP - Desplegando la imagen recién construida)
+  # 3. DAST SCAN (OWASP ZAP)
   # =========================================================================
   dast_scan:
     runs-on: self-hosted
     needs: [container_image_scan]
     env:
       TARGET_URL: http://localhost:3000
-
     steps:
-      - name: Checkout Code # Se necesita el Dockerfile para iniciar la app
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      # --- Despliegue Temporal (Usando la imagen local) ---
-      - name: Start Juice Shop Container (Inicia la app)
+      # --- Despliegue Temporal ---
+      - name: Start Juice Shop Container
         run: |
           docker run -d --name juice-shop-test -p 3000:3000 ${{ env.LOCAL_IMAGE_TAG }}
           sleep 30
 
-      # --- OWASP ZAP (Ejecuta el ataque) ---
+      # --- OWASP ZAP Baseline Scan ---
       - name: Run ZAP Baseline Scan
         uses: docker://ghcr.io/zaproxy/zaproxy/zap-baseline:stable
         with:
-          args: -t ${{ env.TARGET_URL }}
-                -r zap-baseline-report.xml
-                -J zap-baseline-report.json
-                -I
+          args: |
+            -t ${{ env.TARGET_URL }} \
+            -r zap-baseline-report.xml \
+            -J zap-baseline-report.json \
+            -I
 
-      - name: Check ZAP Alerts and Fail Pipeline (Gate)
+      # --- Gate: Fallar si hay alertas críticas ---
+      - name: Check ZAP Alerts
         run: |
           if grep -q '"risk": "High"' zap-baseline-report.json || grep -q '"risk": "Critical"' zap-baseline-report.json; then
-            echo "❌ ¡FALLO DE DAST! Se encontraron alertas Altas/Críticas."
+            echo "❌ ¡FALLO DE DAST! Alertas Altas/Críticas."
             exit 1
           else
             echo "✅ DAST completado."
-          fi
 
       # --- LIMPIEZA ---
       - name: Stop Juice Shop Container
         if: always()
         run: docker stop juice-shop-test
+
+  # =========================================================================
+  # 4. AGREGACIÓN DE REPORTES
+  # =========================================================================
+  aggregate_reports:
+    runs-on: self-hosted
+    needs: [build_sast_sca, container_image_scan, dast_scan]
+    steps:
+      - name: Download all reports
+        uses: actions/download-artifact@v4
+        with:
+          path: reports
+
+      - name: Aggregate Final Report
+        run: |
+          mkdir -p final-report
+          echo "=== DevSecOps Final Report ===" > final-report/summary.txt
+          echo "--- SAST ---" >> final-report/summary.txt
+          ls reports/sast-reports >> final-report/summary.txt || true
+          echo "--- Dependencies ---" >> final-report/summary.txt
+          ls reports/dependency-reports >> final-report/summary.txt || true
+          echo "--- DAST ---" >> final-report/summary.txt
+          ls reports/zap-report >> final-report/summary.txt || true
+          echo "--- Secrets ---" >> final-report/summary.txt
+          cat reports/gl-security-reports/secrets-report.json >> final-report/summary.txt || true
+
+      - name: Upload Final Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-report
+          path: final-report/
