@@ -4,18 +4,15 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
-
 permissions:
   contents: read
   packages: write
   security-events: write
-
 env:
   LOCAL_IMAGE_TAG: local-juice-shop:latest # Etiqueta para la imagen que construimos
   REPORT_DIR: gl-security-reports
-
-jobs:
-
+jobs: # <--- NOTA: Aquí el bloque 'jobs:' está inmediatamente después de 'env:'
+  
   # =========================================================================
   # 1. BUILD, TEST, SAST, SCA, SECRETS (Trabajando en el código fuente)
   # =========================================================================
@@ -59,8 +56,7 @@ jobs:
         uses: docker://python:3.9-slim
         with:
           args: sh -c "pip install detect-secrets && detect-secrets scan --baseline . --exclude-files '.git/*' --output ${{ env.REPORT_DIR }}/secrets-report.json || true"
-      # (Se pueden añadir más pasos de SCA aquí)
-
+      
       # --- GATE: Fallar si se detectan Secrets ---
       - name: Fail if Secrets Detected
         run: |
