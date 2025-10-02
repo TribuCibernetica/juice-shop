@@ -42,9 +42,7 @@ jobs:
         uses: returntocorp/semgrep-action@v1
         with:
           config: 'p/ci'
-
       - name: SonarQube Analysis
-        if: ${{ secrets.SONAR_HOST_URL && secrets.SONAR_TOKEN }}
         uses: sonarsource/sonarqube-scan-action@master
         with:
           args: >
