@@ -28,25 +28,21 @@ jobs:
         with:
           fetch-depth: 0
 
-      # --- Setup Node.js ---
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 'lts/*'
 
-      # --- Build & Unit Tests ---
       - name: Install Dependencies and Run Tests
         run: |
           npm install
           npm test
 
-      # --- SAST: Semgrep ---
       - name: Run Semgrep SAST
         uses: returntocorp/semgrep-action@v1
         with:
           config: 'p/ci'
 
-      # --- SAST: SonarQube ---
       - name: SonarQube Analysis
         uses: sonarsource/sonarqube-scan-action@master
         with:
@@ -57,14 +53,13 @@ jobs:
             -Dsonar.login=${{ secrets.SONAR_TOKEN }}
             -Dsonar.qualitygate.wait=true
 
-      # --- Detect Secrets ---
       - name: Run detect-secrets
         run: |
           pip install detect-secrets
           mkdir -p ${{ env.REPORT_DIR }}
           detect-secrets scan --baseline . --exclude-files '.git/*' --output ${{ env.REPORT_DIR }}/secrets-report.json || true
 
-     - name: Gate: Fail if Secrets Detected
+      - name: Gate: Fail if Secrets Detected
         run: |
           if ! grep -q '"results": {}' ${{ env.REPORT_DIR }}/secrets-report.json 2>/dev/null; then
             echo "❌ Secrets encontrados, fallando pipeline"
@@ -72,12 +67,10 @@ jobs:
           else
             echo "✅ No se detectaron secrets"
 
-      # --- Build Docker Image ---
       - name: Build Juice Shop Docker Image
         run: |
           docker build -t ${{ env.LOCAL_IMAGE_TAG }} .
 
-      # --- Upload Artifacts ---
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -94,12 +87,12 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # --- Run Trivy ---
       - name: Run Trivy Container Scan
-        uses: docker://aquasec/trivy:latest
-        with:
-          args: |
-            image \
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v $PWD:/app \
+            aquasec/trivy:latest image \
             --format sarif \
             --output trivy-results.sarif \
             --severity CRITICAL,HIGH \
@@ -123,23 +116,19 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # --- Run Juice Shop Container ---
       - name: Start Juice Shop
         run: |
           docker run -d --name juice-shop-test -p 3000:3000 ${{ env.LOCAL_IMAGE_TAG }}
           sleep 30
 
-      # --- Run OWASP ZAP Baseline Scan ---
       - name: ZAP Baseline Scan
-        uses: docker://ghcr.io/zaproxy/zaproxy/zap-baseline:stable
-        with:
-          args: |
+        run: |
+          docker run --rm -v $PWD:/zap/wrk/:Z ghcr.io/zaproxy/zaproxy/zap-baseline:stable \
             -t ${{ env.TARGET_URL }} \
             -r zap-baseline-report.xml \
             -J zap-baseline-report.json \
             -I
 
-      # --- Gate: Fail if Alerts High/Critical ---
       - name: Check ZAP Alerts
         run: |
           if grep -q '"risk": "High"' zap-baseline-report.json || grep -q '"risk": "Critical"' zap-baseline-report.json; then
@@ -148,7 +137,6 @@ jobs:
           else
             echo "✅ DAST completado."
 
-      # --- Cleanup ---
       - name: Stop Juice Shop Container
         if: always()
         run: docker stop juice-shop-test
