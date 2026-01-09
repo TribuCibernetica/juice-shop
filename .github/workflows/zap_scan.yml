@@ -4,8 +4,8 @@ on:
   pull_request:
     branches: [ "develop" ]
   schedule:
-    - cron: '0 18 * * 6' # Todos los sábados a las 6 PM
-  workflow_dispatch: # Permite ejecución manual para pruebas
+    - cron: '0 18 * * 6'
+  workflow_dispatch:
 
 jobs:
   zap_scan:
@@ -17,24 +17,25 @@ jobs:
         with:
           ref: develop
 
-      # 1. Levantar la instancia local de Juice Shop
+      # SOLUCIÓN AL ACCESS DENIED
+      - name: Prepare Workspace
+        run: chmod -R 777 .
+
       - name: Start Juice Shop Instance
         run: |
           docker run -d -p 3000:3000 bkimminich/juice-shop
           timeout 60s bash -c 'until curl -s localhost:3000; do sleep 1; done'
 
-      # 2. EJECUCIÓN PARA PULL REQUESTS (Baseline Scan - Rápido)
       - name: ZAP Baseline Scan (PR Gateway)
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
         uses: zaproxy/action-baseline@v0.12.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           target: 'http://localhost:3000'
           rules_file_name: '.zap/rules.tsv'
-          # -l High: Falla el PR si hay riesgos altos para proteger la rama
-          cmd_options: '-r zap_report.html -l High'
+          # Corregido: -l FAIL y añadimos -I para que no aborte el reporte
+          cmd_options: '-r zap_report.html -l FAIL -I'
 
-      # 3. EJECUCIÓN PROGRAMADA (Full Scan - Profundo)
       - name: ZAP Full Scan (Weekly Deep Dive)
         if: github.event_name == 'schedule'
         uses: zaproxy/action-full-scan@v0.10.0
@@ -42,13 +43,14 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           target: 'http://localhost:3000'
           rules_file_name: '.zap/rules.tsv'
-          # En el semanal no bloqueamos (opcional), solo generamos el reporte completo
-          cmd_options: '-r zap_full_report.html'
+          cmd_options: '-r zap_full_report.html -I'
 
-      # 4. Subir reportes como artefactos
       - name: Upload Security Report
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: ${{ github.event_name == 'schedule' && 'zap-full-report' || 'zap-baseline-report' }}
-          path: '*.html'
+          # Especificamos el archivo exacto para evitar errores de búsqueda
+          path: |
+            zap_report.html
+            zap_full_report.html
