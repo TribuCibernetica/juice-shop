@@ -30,8 +30,11 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           target: 'http://localhost:3000'
           rules_file_name: '.zap/rules.tsv'
-          # IMPORTANTE: -I es fundamental para que el reporte NO pese 148 bytes
-          cmd_options: '-j -a -l WARN -I'
+          # -j: Ajax Spider para SPA
+          # -a: Incluye reglas en estado Alpha
+          # -m 5: Da más tiempo de rastreo
+          # -I: Para que no rompa el pipeline y genere el reporte completo
+          cmd_options: '-r zap_report.html -j -a -m 5 -l WARN -I'
 
       # 3. EJECUCIÓN PROGRAMADA (Full Scan - Profundo)
       - name: ZAP Full Scan (Weekly Deep Dive)
