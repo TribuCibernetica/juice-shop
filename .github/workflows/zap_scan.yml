@@ -23,6 +23,9 @@ jobs:
           docker run -d -p 3000:3000 bkimminich/juice-shop
           timeout 60s bash -c 'until curl -s localhost:3000; do sleep 1; done'
 
+      - name: Prepare Workspace
+        run: chmod -R 777 .
+
       # 2. EJECUCIÓN PARA PULL REQUESTS (Baseline Scan - Rápido)
       - name: ZAP Baseline Scan (PR Gateway)
         uses: zaproxy/action-baseline@v0.12.0
@@ -30,8 +33,8 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           target: 'http://localhost:3000'
           rules_file_name: '.zap/rules.tsv'
-          # IMPORTANTE: -I es fundamental para que el reporte NO pese 148 bytes
-          cmd_options: '-j -a -l WARN -I'
+          # Usamos un nombre de reporte estándar
+          cmd_options: '-r zap_report.html -j -a -l WARN -I'
 
       # 3. EJECUCIÓN PROGRAMADA (Full Scan - Profundo)
       - name: ZAP Full Scan (Weekly Deep Dive)
@@ -49,5 +52,8 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ${{ github.event_name == 'schedule' && 'zap-full-report' || 'zap-baseline-report' }}
-          path: '*.html'
+          #name: ${{ github.event_name == 'schedule' && 'zap-full-report' || 'zap-baseline-report' }}
+          # Usamos un nombre fijo y simple para evitar errores de validación
+          name: zap-security-report
+          # Especificamos el archivo exacto que genera cmd_options para evitar archivos vacíos
+          path: zap_report.html
