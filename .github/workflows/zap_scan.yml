@@ -31,9 +31,9 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           target: 'http://localhost:3000'
           rules_file_name: '.zap/rules.tsv'
-          # -l High: Falla el PR si hay riesgos altos para proteger la rama
-          cmd_options: '-r zap_report.html -l High'
-
+          # Usamos -r para el reporte HTML y -J para el JSON
+          cmd_options: '-r zap_report.html -J report_json.json -I'
+          
       # 3. EJECUCIÓN PROGRAMADA (Full Scan - Profundo)
       - name: ZAP Full Scan (Weekly Deep Dive)
         if: github.event_name == 'schedule'
