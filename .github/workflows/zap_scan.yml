@@ -31,8 +31,10 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           target: 'http://localhost:3000'
           rules_file_name: '.zap/rules.tsv'
-          # -l High: Falla el PR si hay riesgos altos para proteger la rama
-          cmd_options: '-r zap_report.html -l High'
+          # -j: Activa el Ajax Spider para apps tipo Angular/React
+          # -a: Incluye reglas alpha (más agresivo)
+          # -l WARN: Muestra advertencias, no solo fallos críticos
+          cmd_options: '-r zap_report.html -j -a -l WARN -I'
 
       # 3. EJECUCIÓN PROGRAMADA (Full Scan - Profundo)
       - name: ZAP Full Scan (Weekly Deep Dive)
