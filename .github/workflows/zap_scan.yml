@@ -23,15 +23,21 @@ jobs:
           docker run -d -p 3000:3000 bkimminich/juice-shop
           timeout 60s bash -c 'until curl -s localhost:3000; do sleep 1; done'
 
-      # 2. EJECUCIÓN PARA PULL REQUESTS (Baseline Scan - Rápido)
+     # 1. Permisos totales para evitar el AccessDenied
+      - name: Fix Workspace Permissions
+        run: chmod -R 777 .
+
+      # 2. Escaneo con parámetros seguros
       - name: ZAP Baseline Scan (PR Gateway)
+        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
         uses: zaproxy/action-baseline@v0.12.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           target: 'http://localhost:3000'
           rules_file_name: '.zap/rules.tsv'
-          # IMPORTANTE: -I es fundamental para que el reporte NO pese 148 bytes
-          cmd_options: '-j -a -l WARN -I'
+          # -I: Fundamental para que el proceso termine bien y escriba el reporte
+          # -r: Forzamos el nombre del archivo de salida
+          cmd_options: '-r zap_report.html -j -a -l WARN -I'
 
       # 3. EJECUCIÓN PROGRAMADA (Full Scan - Profundo)
       - name: ZAP Full Scan (Weekly Deep Dive)
@@ -44,10 +50,10 @@ jobs:
           # En el semanal no bloqueamos (opcional), solo generamos el reporte completo
           cmd_options: '-r zap_full_report.html'
 
-      # 4. Subir reportes como artefactos
+   # 3. Subida con nombre estático (Sin variables complejas)
       - name: Upload Security Report
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ${{ github.event_name == 'schedule' && 'zap-full-report' || 'zap-baseline-report' }}
-          path: '*.html'
+          name: zap-security-report
+          path: zap_report.html
