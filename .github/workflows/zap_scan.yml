@@ -23,6 +23,10 @@ jobs:
           docker run -d -p 3000:3000 bkimminich/juice-shop
           timeout 60s bash -c 'until curl -s localhost:3000; do sleep 1; done'
 
+      # PASO CRUCIAL: Dar permisos de escritura a la carpeta actual
+      - name: Prepare Workspace
+        run: chmod -R 777 .
+
       # 2. EJECUCIÓN PARA PULL REQUESTS (Baseline Scan - Rápido)
       - name: ZAP Baseline Scan (PR Gateway)
         if: github.event_name == 'pull_request'
