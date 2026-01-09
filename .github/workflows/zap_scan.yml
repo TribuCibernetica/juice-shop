@@ -56,4 +56,4 @@ jobs:
         if: always()
         with:
           name: zap-security-report
-          path: zap_report.html
+          path: zap-report.html
