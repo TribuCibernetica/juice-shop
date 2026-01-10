@@ -27,20 +27,16 @@ jobs:
       - name: Fix Workspace Permissions
         run: chmod -R 777 .
 
-      # 2. Escaneo con parámetros seguros
-      - name: ZAP Baseline Scan (PR Gateway)
-        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
-        uses: zaproxy/action-baseline@v0.12.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          target: 'http://localhost:3000'
-          rules_file_name: '.zap/rules.tsv'
-          # ESTA ES LA SOLUCIÓN TÉCNICA REAL:
-          # Indicamos a la acción que NO suba el reporte por su cuenta
-          upload_report: false
-          # -I: Fundamental para que el proceso termine bien y escriba el reporte
-          # -r: Forzamos el nombre del archivo de salida
-          cmd_options: '-r zap_report.html -j -a -l WARN -I'
+         
+
+      - name: ZAP Baseline Scan (Manual Docker)
+        # Ejecutamos ZAP directamente para evitar que la Action intente subir artefactos
+        run: |
+          docker run -v $(pwd):/zap/wrk/:rw --network=host -t ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
+            -t http://localhost:3000 \
+            -c .zap/rules.tsv \
+            -j -a -l WARN -I \
+            -r zap_report.html
 
       # 3. EJECUCIÓN PROGRAMADA (Full Scan - Profundo)
       - name: ZAP Full Scan (Weekly Deep Dive)
