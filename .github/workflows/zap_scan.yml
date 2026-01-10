@@ -35,6 +35,9 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           target: 'http://localhost:3000'
           rules_file_name: '.zap/rules.tsv'
+          # ESTA ES LA SOLUCIÓN TÉCNICA REAL:
+          # Indicamos a la acción que NO suba el reporte por su cuenta
+          upload_report: false
           # -I: Fundamental para que el proceso termine bien y escriba el reporte
           # -r: Forzamos el nombre del archivo de salida
           cmd_options: '-r zap_report.html -j -a -l WARN -I'
