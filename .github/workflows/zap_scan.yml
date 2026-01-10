@@ -36,6 +36,15 @@ jobs:
             -c .zap/rules.tsv \
             -j -a -l WARN -I \
             -r zap-report.html
+
+      - name: ZAP Full Scan (Deep Dive)
+        # Cambiamos baseline por full-scan para un ataque activo
+        run: |
+          docker run -v $(pwd):/zap/wrk/:rw --network=host -t ghcr.io/zaproxy/zaproxy:stable zap-full-scan.py \
+            -t http://localhost:3000 \
+            -c .zap/rules.tsv \
+            -j -a -l WARN -I \
+            -r zap-report-full.html
             
       # 3. EJECUCIÓN PROGRAMADA (Full Scan - Profundo)
       - name: ZAP Full Scan (Weekly Deep Dive)
@@ -54,4 +63,4 @@ jobs:
         if: always()
         with:
           name: zap-security-report
-          path: zap-report.html
+          path: zap-report.html, zap-report-full.html
