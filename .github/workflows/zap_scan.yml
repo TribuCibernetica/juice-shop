@@ -28,14 +28,14 @@ jobs:
         run: chmod -R 777 .
 
       # 2. Escaneo con parámetros seguros
-      - name: ZAP Baseline Scan (Manual Docker)
-        # Aseguramos que el nombre del reporte sea zap_report.html
+      - name: ZAP Full Scan (Deep Dive)
+        # Cambiamos baseline por full-scan para un ataque activo
         run: |
-          docker run -v $(pwd):/zap/wrk/:rw --network=host -t ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
+          docker run -v $(pwd):/zap/wrk/:rw --network=host -t ghcr.io/zaproxy/zaproxy:stable zap-full-scan.py \
             -t http://localhost:3000 \
             -c .zap/rules.tsv \
             -j -a -l WARN -I \
-            -r zap-report.html
+            -r zap_report.html
             
       # 3. EJECUCIÓN PROGRAMADA (Full Scan - Profundo)
       - name: ZAP Full Scan (Weekly Deep Dive)
