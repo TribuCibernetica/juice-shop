@@ -28,14 +28,25 @@ jobs:
         run: chmod -R 777 .
 
       # 2. Escaneo con parámetros seguros
-      - name: ZAP Baseline Scan (Manual Docker)
-        # Aseguramos que el nombre del reporte sea zap_report.html
+      - name: ZAP Execution
         run: |
-          docker run -v $(pwd):/zap/wrk/:rw --network=host -t ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
+          # 1. Determinamos el tipo de escaneo y nombre de reporte según el evento
+          if [ "${{ github.event_name }}" == "schedule" ]; then
+            echo "Ejecutando Full Scan profundo..."
+            SCRIPT="zap-full-scan.py"
+            REPORT_NAME="zap_report_full.html"
+          else
+            echo "Ejecutando Baseline Scan rápido..."
+            SCRIPT="zap-baseline.py"
+            REPORT_NAME="zap_report_baseline.html"
+          fi
+          
+          # 2. Ejecutamos Docker usando la variable del reporte
+          docker run -v $(pwd):/zap/wrk/:rw --network=host -t ghcr.io/zaproxy/zaproxy:stable $SCRIPT \
             -t http://localhost:3000 \
             -c .zap/rules.tsv \
             -j -a -l WARN -I \
-            -r zap-report.html
+            -r $REPORT_NAME
             
       # 3. EJECUCIÓN PROGRAMADA (Full Scan - Profundo)
       - name: ZAP Full Scan (Weekly Deep Dive)
@@ -53,5 +64,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: zap-security-report
-          path: zap-report.html
+          # El nombre del artefacto en el Summary indicará qué reporte es
+          name: ${{ github.event_name == 'schedule' && 'ZAP-Full-Deep-Report' || 'ZAP-Baseline-Quick-Report' }}
+          # Usamos un comodín para capturar cualquier reporte HTML generado
+          path: '*.html'
