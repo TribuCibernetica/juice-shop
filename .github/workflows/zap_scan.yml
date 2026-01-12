@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [ "develop" ]
   schedule:
-    - cron: '0 18 * * 6' # Todos los sábados a las 6 PM
+    - cron: '0 3 * * 6' # Todos los sábados a las 3 am
   workflow_dispatch: # Permite ejecución manual para pruebas
 
 jobs:
@@ -23,32 +23,29 @@ jobs:
           docker run -d -p 3000:3000 bkimminich/juice-shop
           timeout 60s bash -c 'until curl -s localhost:3000; do sleep 1; done'
 
-     # 1. Permisos totales para evitar el AccessDenied
+     # 2. Permisos totales para evitar el AccessDenied
       - name: Fix Workspace Permissions
         run: chmod -R 777 .
 
-      # 2. Escaneo con parámetros seguros
-      - name: ZAP Execution
+      # 3. Escaneo con parámetros seguros
+      - name: ZAP Baseline Scan (Quick)
         run: |
-          # 1. Determinamos el tipo de escaneo y nombre de reporte según el evento
-          if [ "${{ github.event_name }}" == "schedule" ]; then
-            echo "Ejecutando Full Scan profundo..."
-            SCRIPT="zap-full-scan.py"
-            REPORT_NAME="zap_report_full.html"
-          else
-            echo "Ejecutando Baseline Scan rápido..."
-            SCRIPT="zap-baseline.py"
-            REPORT_NAME="zap_report_baseline.html"
-          fi
-          
-          # 2. Ejecutamos Docker usando la variable del reporte
-          docker run -v $(pwd):/zap/wrk/:rw --network=host -t ghcr.io/zaproxy/zaproxy:stable $SCRIPT \
+          docker run -v $(pwd):/zap/wrk/:rw --network=host -t ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
             -t http://localhost:3000 \
             -c .zap/rules.tsv \
             -j -a -l WARN -I \
-            -r $REPORT_NAME
+            -r zap_report_baseline.html
+
+      - name: ZAP Full Scan (Deep)
+        # Para el ejercicio, este corre siempre. Luego lo comentaremos o usaremos lógica 'if'.
+        run: |
+          docker run -v $(pwd):/zap/wrk/:rw --network=host -t ghcr.io/zaproxy/zaproxy:stable zap-full-scan.py \
+            -t http://localhost:3000 \
+            -c .zap/rules.tsv \
+            -j -a -l WARN -I \
+            -r zap_report_full.html
             
-      # 3. EJECUCIÓN PROGRAMADA (Full Scan - Profundo)
+      # 4. EJECUCIÓN PROGRAMADA (Full Scan - Profundo)
       - name: ZAP Full Scan (Weekly Deep Dive)
         if: github.event_name == 'schedule'
         uses: zaproxy/action-full-scan@v0.10.0
@@ -59,12 +56,11 @@ jobs:
           # En el semanal no bloqueamos (opcional), solo generamos el reporte completo
           cmd_options: '-r zap_full_report.html'
 
-   # 3. Subida con nombre estático (Sin variables complejas)
+   # 5. Subida con nombre estático (Sin variables complejas)
       - name: Upload Security Report
         uses: actions/upload-artifact@v4
         if: always()
         with:
           # El nombre del artefacto en el Summary indicará qué reporte es
-          name: ${{ github.event_name == 'schedule' && 'ZAP-Full-Deep-Report' || 'ZAP-Baseline-Quick-Report' }}
-          # Usamos un comodín para capturar cualquier reporte HTML generado
-          path: '*.html'
+          name: ZAP-Dual-Reports-Exercise
+          path: '*.html' # Capturará tanto zap_report_baseline como zap_report_full
